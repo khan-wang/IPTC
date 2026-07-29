@@ -21,7 +21,7 @@ from common_places2_fv import load_manifest, select_balanced_subset, subset_from
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-LATENT_ROOT = REPO_ROOT
+LATENT_ROOT = REPO_ROOT / "third_party" / "baselines" / "latent-code-inpainting"
 DEFAULT_MANIFEST = REPO_ROOT / "exp_data" / "01_main_256_places2_extended36500" / "sample_manifest.csv"
 DEFAULT_CONFIG = LATENT_ROOT / "configs" / "places_inpainting.yaml"
 EXPECTED_CKPTS = (

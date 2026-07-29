@@ -3,10 +3,15 @@ ckpts/**/*.ckpt
 logs/
 outputs/
 exp_data/
-data/
+/data/
+/checkpoints/
+/datasets/
+/runs/
 *.pth
 *.pt
 *.pkl
+*.onnx
+*.safetensors
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -131,12 +136,20 @@ celerybeat.pid
 
 # Environments
 .env
+.env.*
+!.env.example
 .venv
 env/
 venv/
 ENV/
 env.bak/
 venv.bak/
+
+# Local editor and OS state
+.idea/
+.vscode/
+Thumbs.db
+desktop.ini
 
 # Spyder project settings
 .spyderproject

@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this code, please cite the SBVC manuscript."
+title: "SBVC: Plug-and-Play Structure-Bounded Visible-Token Compression for Transformer-Based Image Inpainting"
+type: software
+authors:
+  - family-names: Wang
+    given-names: Kehan
+  - family-names: Peng
+    given-names: Hong
+  - family-names: Zheng
+    given-names: Weifa
+  - family-names: Lan
+    given-names: Guosheng
+  - family-names: Yu
+    given-names: Ying
+repository-code: "https://github.com/khan-wang/Latent-Codes-SBVC"
+version: 0.1.0
+date-released: 2026-07-29

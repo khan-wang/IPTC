@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -14,28 +13,15 @@ import torch
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 TOOLS_DIR = REPO_ROOT / "tools"
-PUT_ROOT = Path(os.environ.get("PUT_ROOT", "")).expanduser() if os.environ.get("PUT_ROOT") else None
-PUT_SBVC_TOOLS_ROOT = (
-    Path(os.environ.get("PUT_SBVC_TOOLS_ROOT", "")).expanduser()
-    if os.environ.get("PUT_SBVC_TOOLS_ROOT")
-    else None
-)
-for import_path in (TOOLS_DIR, PUT_SBVC_TOOLS_ROOT, PUT_ROOT):
-    if import_path is None:
-        continue
+PUT_ROOT = REPO_ROOT / "third_party" / "PUT"
+for import_path in (TOOLS_DIR, PUT_ROOT):
     path_str = str(import_path)
     if path_str not in sys.path:
         sys.path.insert(0, path_str)
 
 from common_places2_fv import BUCKET_RANK, load_manifest, materialize_manifest_links
-try:
-    import phase5a_standardized_comparison as phase5a
-    from scripts.inference import ImagePathDataset
-except ImportError as exc:
-    raise ImportError(
-        "eval_places2_fv_outputs.py reuses PUT metric helpers. Set PUT_SBVC_TOOLS_ROOT "
-        "to the PUT-SBVC/tools directory and PUT_ROOT to the official PUT root before running full evaluation."
-    ) from exc
+import phase5a_standardized_comparison as phase5a
+from scripts.inference import ImagePathDataset
 
 
 def parse_args() -> argparse.Namespace:

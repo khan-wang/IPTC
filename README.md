@@ -1,89 +1,162 @@
+# SBVC
 
+Official implementation of **SBVC: Plug-and-Play Structure-Bounded
+Visible-Token Compression for Transformer-Based Image Inpainting**.
 
-# Pluralistic Image Inpainting with Latent Codes
+SBVC compresses only visible tokens that are separated from the inpainting
+mask boundary. Protected tokens remain unchanged, eligible tokens are merged
+inside the Transformer core, and the compact sequence is restored to the
+original topology before decoding. The repository contains the two paper
+backbones:
 
+- PUT with risk-calibrated eligible-token matching.
+- Latent Codes with late-layer QKV compression and a cached route.
 
-[paper](https://openaccess.thecvf.com/content/CVPR2024/html/Chen_Dont_Look_into_the_Dark_Latent_Codes_for_Pluralistic_Image_CVPR_2024_paper.html) | [arXiv](https://arxiv.org/abs/2403.18186)
+The method is training-free for the reported pretrained checkpoints.
 
-This repository contains the code (in PyTorch) for ''Don't Look into the Dark: Latent Codes for Pluralistic Image Inpainting'' (CVPR'2024) by Haiwei Chen and [Yajie Zhao](https://www.yajie-zhao.com/).
+![SBVC method overview](assets/method_overview.png)
 
+## Main Results
 
+The table reports the principal operating point for each host on the fixed
+36,500-image Places2/NaturalScene protocol.
 
-## Contents
+| Backbone | Method | Setting | PSNR | SSIM | LPIPS | Core GMACs/image | GMAC reduction | Realized CR |
+|---|---|---|---:|---:|---:|---:|---:|---:|
+| PUT | Dense | - | 25.3055 | 0.8536 | 0.1490 | 2204.6158 | 0.00% | 0.0000 |
+| PUT | SBVC | r224 | 25.3632 | 0.8530 | 0.1524 | 1803.7837 | 18.18% | 0.1762 |
+| Latent Codes | Dense | - | 24.9776 | 0.8404 | 0.139211 | 16.8396 | 0.00% | 0.0000 |
+| Latent Codes | SBVC | QKV-r64, layers 20-39 | 24.9909 | 0.8404 | 0.139209 | 13.1685 | 21.80% | 0.1245 |
 
-1. [Requirements](#requirements)
-2. [Usage](#usage)
-3. [Experiments](#experiments)
-4. [Contact](#contact)
+Machine-readable values are in
+[`results/paper_main_results.csv`](results/paper_main_results.csv).
 
-## Getting Started
-The inpainting method in this repository utilizes priors learnt from discrete latent codes to diversely complete a masked image. The method works in both free-form and large-hole mask settings: 
+![Quality-compute operating points](assets/quality_compute.png)
 
-![](https://github.com/nintendops/latent-code-inpainting/blob/main/media/main.gif?raw=true)
+## Qualitative Results
 
-## Requirements
+The original `media/main.gif` in this repository belonged to the upstream
+Latent Codes project. The figure below is the actual SBVC comparison used by
+the manuscript.
 
-The code has been tested on Python3.11, PyTorch 2.1.0 and CUDA (12.1). The additional dependencies can be installed with 
+![Dense host and SBVC qualitative comparison](assets/qualitative_comparison.png)
+
+## Repository Layout
+
+```text
+.
+|-- assets/                         # Paper figures used by this README
+|-- docs/                           # Installation, reproduction, provenance
+|-- results/                        # Machine-readable paper results
+|-- scripts/                        # Reproduction launchers
+|-- third_party/
+|   |-- PUT/                        # PUT host with the SBVC integration
+|   `-- baselines/
+|       `-- latent-code-inpainting/ # Latent Codes host with SBVC integration
+`-- tools/                          # Evaluation and route-analysis utilities
 ```
-pip install -r environment.txt
+
+## Installation
+
+The paper experiments used Python 3.10.19, PyTorch 2.9.0+cu128, torchvision
+0.24.0+cu128, and an NVIDIA RTX 5090. The two upstream hosts have additional
+legacy dependencies, so a clean Conda environment is recommended. Use the root
+`requirements-runtime.txt`; the dependency files inside `third_party/` are
+retained for provenance and target obsolete host environments.
+
+See [`docs/INSTALL.md`](docs/INSTALL.md) for host-specific setup and checkpoint
+placement, including installation on an offline compute node.
+
+## Quick Start
+
+All private machine paths were removed from the launchers. Set the required
+paths explicitly:
+
+```bash
+export PYTHON_BIN="$(command -v python)"
+export PUT_CHECKPOINT=/path/to/put/checkpoint.pth
+export SBVC_IMAGE_ROOT=/path/to/places365/val_large
+export SBVC_MASK_ROOT=/path/to/testing_mask_dataset
 ```
 
-## Getting Started
+Run a PUT sanity evaluation:
 
-Our models are built upon training data from both [Places365-Standard](http://places2.csail.mit.edu/download-private.html) and [CelebA-HQ](https://github.com/tkarras/progressive_growing_of_gans).
-
-As the first step, please download the respective pretrained models ([Places](https://drive.google.com/drive/folders/1ZchB85kuUjLpxcz-WSgPDbkfeFcPRjZL?usp=sharing) | [CelebA-HQ](https://drive.google.com/drive/folders/1-o9KefXQb7R8qE70luYU58u-ksXOgmBh?usp=sharing)) and places the checkpoint files under the ```ckpts/``` folder in the root directory.
- 
-
-**Quick Test**
-
-We provide a [demo notebook](https://github.com/nintendops/latent-code-inpainting/blob/main/eval.ipynb) at ```eval.ipynb``` for quickly testing the inpainting models. Please follow instructions in the notebook to set up inference with your desired configurations.
-
-**Training**
-
-If you are interested in training our models on custom data, please refer to the list of training configurations under the folder ```training_configs/```. To train everything from scratch, the complete model will need to go through a total of 4 training stages. Below lists the stages and their respective configuration templates:
- ```
-Stage 1: training the VQGAN backbone 
-	- training_configs/places_vqgan.yaml 
-Stage 2: training the encoder module
-	- training_configs/places_partialencoder.yaml 
-Stage 3: training the transformer module
-	- training_configs/places_transformer.yaml 
-Stage 4: training the decoder module
-	- training_configs/places_unet_256.yaml 
-	- training_configs/places_unet_512.yaml 
+```bash
+PYTHONPATH="$PWD/tools:$PWD/third_party/PUT" \
+"$PYTHON_BIN" tools/evaluate_put.py \
+  --put-root "$PWD/third_party/PUT" \
+  --checkpoint "$PUT_CHECKPOINT" \
+  --image-root "$SBVC_IMAGE_ROOT" \
+  --mask-root "$SBVC_MASK_ROOT" \
+  --output-dir runs/put_sanity \
+  --dataset-name "Places2/NaturalScene sanity" \
+  --samples-per-bucket 2
 ```
 
-Note that the modules for stage 2,3,4 can be trained independently, or concurrently,  as these stages only require a pretrained VQGAN backbone from stage 1. 
+Run Latent Codes with the paper operating point:
 
-Please modify the path to the dataset, the path to the pretrained model, and optionally other hyperparameters in these configuration files to suit your needs. The basic command for training these models is as follow:
+```bash
+bash scripts/launch_latent_codes_sbvc_rebinned36500_full.sh
 ```
-python train.py --base PATH_TO_CONFIG -n NAME --gpus GPU_INDEX 
-```
-For instance, to train the VQGAN backbone on a single gpu at index 0:
-```
-python train.py --base training_configs/places_vqgan.yaml -n my_vqgan_backbone --gpus 0, 
-```
- To train the transformer on multiple gpus at index 1,2,3:
-```
-python train.py --base training_configs/places_transformer.yaml -n my_transformer --gpus 1,2,3 
-```
-To evaluate the trained model, please follow configuration files in ```configs/``` to modify the respective paths to each module checkpoints.
 
-## Contact
-Haiwei Chen: chw9308@hotmail.com
-Any discussions or concerns are welcomed!
+The complete protocol and expected manifest layout are documented in
+[`docs/REPRODUCE.md`](docs/REPRODUCE.md).
 
-**Citation**
-If you find our project useful in your research, please consider citing:
+## Paper Configurations
 
+### PUT
+
+```bash
+PUT_BOUNDARY_SPLIT=1
+PUT_SAFE_TOME_R=224
+PUT_SAFE_TOME_SCORE_MODE=ga_spg_lite
+PUT_GA_SPG_LITE_LAMBDA=0.20
+PUT_GA_SPG_LITE_W_TEXTURE=0.45
+PUT_GA_SPG_LITE_W_BOUNDARY=0.35
+PUT_GA_SPG_LITE_W_SMOOTHNESS=0.20
+PUT_GA_SPG_LITE_PAD_MODE=zero
+PUT_GA_SPG_LITE_OPTIMIZED=1
 ```
-@article{chen2024don,
-  title={Don't Look into the Dark: Latent Codes for Pluralistic Image Inpainting},
-  author={Chen, Haiwei and Zhao, Yajie},
-  journal={arXiv preprint arXiv:2403.18186},
-  year={2024}
+
+### Latent Codes
+
+```bash
+LATENT_SBVC_ENABLE=1
+LATENT_SBVC_R=64
+LATENT_SBVC_MODE=qkv
+LATENT_SBVC_LAYER_IDS=20-39
+LATENT_SBVC_ROUTE_CACHE=1
+```
+
+## Checkpoints and Data
+
+Weights, datasets, generated images, and full evaluation outputs are not
+committed. Download PUT and Latent Codes checkpoints from their official
+projects, then place or link them as described in `docs/INSTALL.md`.
+
+## Citation
+
+```bibtex
+@misc{wang2026sbvc,
+  title  = {SBVC: Plug-and-Play Structure-Bounded Visible-Token Compression
+            for Transformer-Based Image Inpainting},
+  author = {Kehan Wang and Hong Peng and Weifa Zheng and Guosheng Lan and Ying Yu},
+  year   = {2026},
+  note   = {Manuscript under review}
 }
 ```
-## License and Acknowledgement
-The code and models in this repo are for research purposes only. Our code is bulit upon [VQGAN](https://github.com/CompVis/taming-transformers).
+
+## Acknowledgments
+
+This implementation builds on
+[PUT](https://github.com/liuqk3/PUT),
+[Latent Codes](https://github.com/nintendops/latent-code-inpainting), and
+[Token Merging](https://github.com/facebookresearch/ToMe).
+See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for source and license
+details.
+
+## License
+
+Third-party components retain their original licenses. A repository-wide
+license for the SBVC modifications has not yet been granted; see
+[`LICENSE.md`](LICENSE.md).

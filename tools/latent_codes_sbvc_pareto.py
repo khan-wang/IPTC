@@ -16,20 +16,21 @@ from typing import Any
 import numpy as np
 import torch
 import torch.nn.functional as F
-from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 TOOLS_ROOT = REPO_ROOT / "tools"
+PUT_ROOT = REPO_ROOT / "third_party" / "PUT"
 DEFAULT_MANIFEST = REPO_ROOT / "outputs" / "places2_fv_reproduction" / "rebinned_full_11997" / "LatentCodes" / "selected_manifest.csv"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "outputs" / "latent_codes_sbvc_pareto_20260502"
 
-for import_path in (TOOLS_ROOT,):
+for import_path in (TOOLS_ROOT, PUT_ROOT):
     import_str = str(import_path)
     if import_str not in sys.path:
         sys.path.insert(0, import_str)
 
 import latent_codes_readonly_probe as probe  # noqa: E402
+from image_synthesis.utils.cal_metrics import get_PSNR, get_SSIM  # noqa: E402
 
 
 LAYER_MODE_TO_IDS = {
@@ -157,13 +158,11 @@ def known_mae(final: torch.Tensor, x: torch.Tensor, mask: torch.Tensor) -> float
 def compute_quality(final: torch.Tensor, x: torch.Tensor, lpips_model, device: torch.device) -> dict[str, float]:
     gt_255 = to_255(x)
     pred_255 = to_255(final)
-    gt_np = gt_255.detach().cpu().squeeze(0).permute(1, 2, 0).numpy()
-    pred_np = pred_255.detach().cpu().squeeze(0).permute(1, 2, 0).numpy()
     with torch.no_grad():
         lpips_value = float(lpips_model(x.to(device), final.to(device)).mean().detach().cpu())
     return {
-        "psnr": float(peak_signal_noise_ratio(gt_np, pred_np, data_range=255)),
-        "ssim": float(structural_similarity(gt_np, pred_np, channel_axis=-1, data_range=255, win_size=51)),
+        "psnr": float(get_PSNR(gt_255, pred_255, tool="skimage")),
+        "ssim": float(get_SSIM(gt_255, pred_255, full=False, win_size=51)),
         "lpips": lpips_value,
     }
 

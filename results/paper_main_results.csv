@@ -1,0 +1,6 @@
+backbone,method,setting,psnr,ssim,lpips,fid,core_gmacs_per_image,gmac_reduction_percent,realized_compression_ratio
+PUT,Dense backbone,-,25.3055,0.8536,0.1490,4.1494,2204.6158,0.00,0.0000
+PUT,SBVC,r128 balanced,25.3455,0.8531,0.1517,4.4429,1903.4912,13.66,0.1205
+PUT,SBVC,r224 higher compression,25.3632,0.8530,0.1524,4.5603,1803.7837,18.18,0.1762
+Latent Codes,Dense backbone,-,24.9776,0.8404,0.139211,1.8388,16.8396,0.00,0.0000
+Latent Codes,SBVC,"qkv-r64, layers 20-39",24.9909,0.8404,0.139209,1.8580,13.1685,21.80,0.1245
