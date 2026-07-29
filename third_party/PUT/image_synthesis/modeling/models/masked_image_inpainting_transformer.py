@@ -161,10 +161,11 @@ def _tome_merge_wavg(merge, x, size=None):
 class BoundaryDetector(nn.Module):
     """GPU-only token split for boundary-preserved valid-token compression."""
 
-    def __init__(self, ring_radius=1, safe_threshold=0.999):
+    def __init__(self, ring_radius=1, safe_threshold=0.999, ablate_valid_token_restriction=False):
         super().__init__()
         self.ring_radius = int(ring_radius)
         self.safe_threshold = float(safe_threshold)
+        self.ablate_valid_token_restriction = bool(ablate_valid_token_restriction)
 
     def _mask_to_token_ratio(self, mask, token_shape):
         token_shape = tuple(int(x) for x in token_shape)
@@ -208,7 +209,10 @@ class BoundaryDetector(nn.Module):
             boundary_token = torch.zeros_like(valid_token)
 
         protect_mask_token = masked_or_partial_token | boundary_token
-        safe_candidate_token = valid_token & ~boundary_token
+        if self.ablate_valid_token_restriction:
+            safe_candidate_token = torch.ones_like(valid_token, dtype=torch.bool)
+        else:
+            safe_candidate_token = valid_token & ~boundary_token
 
         return {
             "token_visible_ratio": token_visible_ratio,
@@ -820,6 +824,7 @@ class MaskedImageInpaintingTransformer(nn.Module):
         self.boundary_detector = BoundaryDetector(
             ring_radius=int(os.environ.get('PUT_BOUNDARY_RING_RADIUS', '1')),
             safe_threshold=float(os.environ.get('PUT_BOUNDARY_SAFE_THRESHOLD', '0.999')),
+            ablate_valid_token_restriction=os.environ.get('PUT_ABLATE_VALID_TOKEN_RESTRICTION', '0') == '1',
         )
         self.boundary_split_profile = {
             'enabled': self.boundary_split_enabled,

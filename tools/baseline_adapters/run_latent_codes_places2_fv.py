@@ -31,6 +31,12 @@ EXPECTED_CKPTS = (
     "places256_unet.ckpt",
     "places256_vqgan1024_BASE.ckpt",
 )
+CELEBA_EXPECTED_CKPTS = (
+    "celeba_decoder.ckpt",
+    "celeba_encoder.ckpt",
+    "celeba_transformer.ckpt",
+    "celeba_vqgan.ckpt",
+)
 _ORIGINAL_TORCH_LOAD = torch.load
 
 
@@ -80,15 +86,42 @@ def instantiate_from_config(config):
 def resolve_ckpt_path(name: str) -> Path:
     direct = LATENT_ROOT / "ckpts" / name
     nested = LATENT_ROOT / "ckpts" / "Places365" / name
+    celeba_nested = LATENT_ROOT / "ckpts" / "CelebA-HQ" / name
     if direct.is_file():
         return direct
     if nested.is_file():
         return nested
+    if celeba_nested.is_file():
+        return celeba_nested
     raise FileNotFoundError(f"missing required Latent Codes checkpoint: {name}")
 
 
-def normalize_config_ckpts(config) -> None:
+def infer_latent_ckpt_family(config_path: Path, config) -> str:
+    if "celeba" in config_path.name.lower():
+        return "celeba"
     params = config.model.params
+    ckpt_text = " ".join(
+        str(getattr(params[name].params, "ckpt_path", ""))
+        for name in ("vqmodel_config", "encoder_config", "decoder_config", "unet_config", "transformer_config")
+        if hasattr(params, name)
+    ).lower()
+    return "celeba" if "celeba" in ckpt_text else "places"
+
+
+def expected_ckpts_for_config(config_path: Path, config) -> tuple[str, ...]:
+    if infer_latent_ckpt_family(config_path, config) == "celeba":
+        return CELEBA_EXPECTED_CKPTS
+    return EXPECTED_CKPTS
+
+
+def normalize_config_ckpts(config, *, config_path: Path) -> None:
+    params = config.model.params
+    if infer_latent_ckpt_family(config_path, config) == "celeba":
+        params.vqmodel_config.params.ckpt_path = str(resolve_ckpt_path("celeba_vqgan.ckpt"))
+        params.encoder_config.params.ckpt_path = str(resolve_ckpt_path("celeba_encoder.ckpt"))
+        params.unet_config.params.ckpt_path = str(resolve_ckpt_path("celeba_decoder.ckpt"))
+        params.transformer_config.params.ckpt_path = str(resolve_ckpt_path("celeba_transformer.ckpt"))
+        return
     params.vqmodel_config.params.ckpt_path = str(resolve_ckpt_path("places256_vqgan1024_BASE.ckpt"))
     params.encoder_config.params.ckpt_path = str(resolve_ckpt_path("places256_partialencoder.ckpt"))
     params.decoder_config.params.ckpt_path = str(resolve_ckpt_path("places256_decoder.ckpt"))
@@ -208,6 +241,7 @@ def summarize_latent_sbvc_stats(stats_rows: list[dict], head_dim: int) -> dict[s
             "actual_compression_ratio": 0.0,
             "route_cache_hits": 0,
             "mode": os.environ.get("LATENT_SBVC_MODE", ""),
+            "route_mode": os.environ.get("LATENT_SBVC_ROUTE_MODE", "safe_similarity"),
             "target_r": int(os.environ.get("LATENT_SBVC_R", "0") or 0),
         }
     before_score = int(sum(int(row["score_elements_before"]) for row in stats_rows))
@@ -234,6 +268,7 @@ def summarize_latent_sbvc_stats(stats_rows: list[dict], head_dim: int) -> dict[s
         "actual_compression_ratio": float(removed_tokens / original_tokens) if original_tokens > 0 else 0.0,
         "route_cache_hits": int(sum(1 for row in stats_rows if row.get("route_cache_hit"))),
         "mode": str(stats_rows[0].get("mode", os.environ.get("LATENT_SBVC_MODE", ""))),
+        "route_mode": str(stats_rows[0].get("route_mode", os.environ.get("LATENT_SBVC_ROUTE_MODE", "safe_similarity"))),
         "target_r": int(stats_rows[0].get("target_r", os.environ.get("LATENT_SBVC_R", "0") or 0)),
     }
 
@@ -311,11 +346,11 @@ def main() -> None:
     prepare_imports()
     patch_torch_load_for_legacy_ckpts()
     force_reference_custom_ops()
-    for ckpt_name in EXPECTED_CKPTS:
+    config_path = Path(args.config).resolve()
+    config = OmegaConf.load(str(config_path))
+    for ckpt_name in expected_ckpts_for_config(config_path, config):
         resolve_ckpt_path(ckpt_name)
-
-    config = OmegaConf.load(str(Path(args.config).resolve()))
-    normalize_config_ckpts(config)
+    normalize_config_ckpts(config, config_path=config_path)
     device = torch.device(f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu")
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
@@ -364,6 +399,7 @@ def main() -> None:
         "actual_compression_ratio",
         "route_cache_hits",
         "mode",
+        "route_mode",
         "target_r",
     ]
     existing_sbvc_rows = load_existing_rows_by_sample(sbvc_csv_path)

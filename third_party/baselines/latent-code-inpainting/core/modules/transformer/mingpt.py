@@ -127,11 +127,21 @@ def _sbvc_restore_tokens(y_compact, src_pos, dst_pos, keep_idx, original_tokens)
     return restored
 
 
-def _sbvc_bipartite_route(features, key_mask, target_r):
-    # Only visible latent tokens may merge. Position 0 is the SOS condition token and stays protected.
+def _sbvc_token_positions(token_indices, grid_size):
+    pos = (token_indices - 1).clamp_min(0)
+    return torch.stack((pos // grid_size, pos % grid_size), dim=-1).float()
+
+
+def _sbvc_bipartite_route(features, key_mask, target_r, route_mode="safe_similarity"):
+    # Default route is unchanged: only visible latent tokens may merge, and token 0 stays protected.
     B, T, _C = features.shape
     device = features.device
-    if target_r <= 0 or T <= 3 or key_mask is None:
+    if target_r <= 0 or T <= 3:
+        return None
+    route_mode = str(route_mode or "safe_similarity").strip().lower()
+    if route_mode not in {"safe_similarity", "safe_distance", "global_similarity"}:
+        route_mode = "safe_similarity"
+    if key_mask is None and route_mode != "global_similarity":
         return None
 
     src_idx = torch.arange(1, T, 2, device=device)
@@ -139,15 +149,27 @@ def _sbvc_bipartite_route(features, key_mask, target_r):
     if src_idx.numel() == 0 or dst_idx.numel() == 0:
         return None
 
-    safe = key_mask.to(dtype=torch.bool).clone()
+    if route_mode == "global_similarity":
+        safe = torch.ones((B, T), dtype=torch.bool, device=device)
+    else:
+        safe = key_mask.to(dtype=torch.bool).clone()
     safe[:, 0] = False
     src_safe = safe.index_select(1, src_idx)
     dst_safe = safe.index_select(1, dst_idx)
 
-    normed = F.normalize(features.float(), dim=-1)
-    src_feat = normed.index_select(1, src_idx)
-    dst_feat = normed.index_select(1, dst_idx)
-    scores = src_feat @ dst_feat.transpose(-2, -1)
+    if route_mode == "safe_distance":
+        grid_size = int(round(math.sqrt(max(T - 1, 1))))
+        if grid_size * grid_size != T - 1:
+            grid_size = max(T - 1, 1)
+        src_pos_2d = _sbvc_token_positions(src_idx, grid_size)
+        dst_pos_2d = _sbvc_token_positions(dst_idx, grid_size)
+        dist2 = (src_pos_2d[:, None, :] - dst_pos_2d[None, :, :]).pow(2).sum(dim=-1)
+        scores = -dist2[None, :, :].expand(B, -1, -1)
+    else:
+        normed = F.normalize(features.float(), dim=-1)
+        src_feat = normed.index_select(1, src_idx)
+        dst_feat = normed.index_select(1, dst_idx)
+        scores = src_feat @ dst_feat.transpose(-2, -1)
     valid = src_safe[:, :, None] & dst_safe[:, None, :]
     scores = scores.masked_fill(~valid, -1.0e9)
 
@@ -255,6 +277,9 @@ class CausalSelfAttention(nn.Module):
         sbvc_mode = os.environ.get("LATENT_SBVC_MODE", "qkv").strip().lower()
         if sbvc_mode not in {"qkv", "kv"}:
             sbvc_mode = "qkv"
+        route_mode = os.environ.get("LATENT_SBVC_ROUTE_MODE", "safe_similarity").strip().lower()
+        if route_mode not in {"safe_similarity", "safe_distance", "global_similarity"}:
+            route_mode = "safe_similarity"
         layer_index = getattr(self, "_sbvc_layer_index", -1)
         sbvc_enabled = (
             _sbvc_env_flag("LATENT_SBVC_ENABLE", False)
@@ -290,14 +315,14 @@ class CausalSelfAttention(nn.Module):
         if sbvc_enabled:
             cache_key = None
             if _sbvc_env_flag("LATENT_SBVC_ROUTE_CACHE", False):
-                cache_key = (id(mask), int(target_r), int(T), int(B), str(device))
+                cache_key = (id(mask), int(target_r), int(T), int(B), str(device), route_mode)
                 route = _LATENT_SBVC_ROUTE_CACHE.get(cache_key)
                 route_cache_hit = route is not None
             else:
                 route = None
             if route is None:
                 start = _sbvc_now(device, profile)
-                route = _sbvc_bipartite_route(x, mask, target_r)
+                route = _sbvc_bipartite_route(x, mask, target_r, route_mode=route_mode)
                 pair_ms = _sbvc_elapsed_ms(device, start, profile)
                 if cache_key is not None and route is not None:
                     _LATENT_SBVC_ROUTE_CACHE[cache_key] = route
@@ -368,6 +393,7 @@ class CausalSelfAttention(nn.Module):
                 "restore_ms": float(restore_ms),
                 "route_cache_hit": bool(route_cache_hit),
                 "mode": sbvc_mode,
+                "route_mode": route_mode,
             })
 
         y = y.transpose(1, 2).contiguous().view(B, T, C) # re-assemble all head outputs side by side

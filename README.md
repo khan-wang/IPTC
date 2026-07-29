@@ -124,9 +124,15 @@ PUT_GA_SPG_LITE_OPTIMIZED=1
 LATENT_SBVC_ENABLE=1
 LATENT_SBVC_R=64
 LATENT_SBVC_MODE=qkv
+LATENT_SBVC_ROUTE_MODE=safe_similarity
 LATENT_SBVC_LAYER_IDS=20-39
 LATENT_SBVC_ROUTE_CACHE=1
 ```
+
+`LATENT_SBVC_ROUTE_MODE` also accepts `safe_distance` and
+`global_similarity` for the matched mechanism controls reported in the paper.
+The PUT ablations use `PUT_BOUNDARY_RING_RADIUS=0` and
+`PUT_ABLATE_VALID_TOKEN_RESTRICTION=1`, respectively.
 
 ## Checkpoints and Data
 

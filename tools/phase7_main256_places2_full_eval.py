@@ -194,6 +194,18 @@ def method_specs(args: argparse.Namespace) -> list[dict[str, Any]]:
             "kind": "sbvc",
             "r": args.safe_tome_r,
         },
+        {
+            "name": "sbvc_no_boundary_hard_protect_r224",
+            "label": f"PUT + SBVC-r{args.safe_tome_r} w/o boundary hard-protect",
+            "kind": "sbvc_no_boundary_hard_protect",
+            "r": args.safe_tome_r,
+        },
+        {
+            "name": "sbvc_no_valid_token_restriction_r224",
+            "label": f"PUT + SBVC-r{args.safe_tome_r} w/o valid-token restriction",
+            "kind": "sbvc_no_valid_token_restriction",
+            "r": args.safe_tome_r,
+        },
     ]
 
 
@@ -223,6 +235,7 @@ def env_for_method(spec: dict[str, Any], args: argparse.Namespace) -> dict[str, 
             {
                 "PUT_GLOBAL_TOME_R": "0",
                 "PUT_BOUNDARY_SPLIT": "0",
+                "PUT_ABLATE_VALID_TOKEN_RESTRICTION": "0",
                 "PUT_SAFE_TOME_R": "0",
                 "PUT_SAFE_TOME_SCORE_MODE": "similarity",
                 "PUT_GA_SPG_LITE_OPTIMIZED": "0",
@@ -235,6 +248,7 @@ def env_for_method(spec: dict[str, Any], args: argparse.Namespace) -> dict[str, 
             {
                 "PUT_GLOBAL_TOME_R": str(spec["r"]),
                 "PUT_BOUNDARY_SPLIT": "0",
+                "PUT_ABLATE_VALID_TOKEN_RESTRICTION": "0",
                 "PUT_SAFE_TOME_R": "0",
                 "PUT_SAFE_TOME_SCORE_MODE": "similarity",
                 "PUT_GA_SPG_LITE_OPTIMIZED": "0",
@@ -247,6 +261,7 @@ def env_for_method(spec: dict[str, Any], args: argparse.Namespace) -> dict[str, 
             {
                 "PUT_GLOBAL_TOME_R": "0",
                 "PUT_BOUNDARY_SPLIT": "1",
+                "PUT_ABLATE_VALID_TOKEN_RESTRICTION": "0",
                 "PUT_BOUNDARY_RING_RADIUS": str(args.boundary_ring_radius),
                 "PUT_SAFE_TOME_R": str(spec["r"]),
                 "PUT_SAFE_TOME_SCORE_MODE": "distance",
@@ -260,6 +275,36 @@ def env_for_method(spec: dict[str, Any], args: argparse.Namespace) -> dict[str, 
             {
                 "PUT_GLOBAL_TOME_R": "0",
                 "PUT_BOUNDARY_SPLIT": "1",
+                "PUT_ABLATE_VALID_TOKEN_RESTRICTION": "0",
+                "PUT_BOUNDARY_RING_RADIUS": str(args.boundary_ring_radius),
+                "PUT_SAFE_TOME_R": str(spec["r"]),
+                "PUT_SAFE_TOME_SCORE_MODE": "ga_spg_lite",
+                "PUT_GA_SPG_LITE_OPTIMIZED": "1",
+                "PUT_GA_SPG_LITE_RUNTIME_CACHE": "1",
+                "PUT_GA_SPG_LITE_PAD_MODE": "zero",
+            }
+        )
+    elif spec["kind"] == "sbvc_no_boundary_hard_protect":
+        env.update(
+            {
+                "PUT_GLOBAL_TOME_R": "0",
+                "PUT_BOUNDARY_SPLIT": "1",
+                "PUT_ABLATE_VALID_TOKEN_RESTRICTION": "0",
+                "PUT_BOUNDARY_RING_RADIUS": "0",
+                "PUT_SAFE_TOME_R": str(spec["r"]),
+                "PUT_SAFE_TOME_SCORE_MODE": "ga_spg_lite",
+                "PUT_GA_SPG_LITE_OPTIMIZED": "1",
+                "PUT_GA_SPG_LITE_RUNTIME_CACHE": "1",
+                "PUT_GA_SPG_LITE_PAD_MODE": "zero",
+            }
+        )
+    elif spec["kind"] == "sbvc_no_valid_token_restriction":
+        env.update(
+            {
+                "PUT_GLOBAL_TOME_R": "0",
+                "PUT_PHASE5K_LEAN_PROFILE": "0",
+                "PUT_BOUNDARY_SPLIT": "1",
+                "PUT_ABLATE_VALID_TOKEN_RESTRICTION": "1",
                 "PUT_BOUNDARY_RING_RADIUS": str(args.boundary_ring_radius),
                 "PUT_SAFE_TOME_R": str(spec["r"]),
                 "PUT_SAFE_TOME_SCORE_MODE": "ga_spg_lite",

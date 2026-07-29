@@ -83,11 +83,36 @@ SBVC r64, QKV compression, layers 20-39:
 bash scripts/launch_latent_codes_sbvc_rebinned36500_full.sh
 ```
 
+The default paper route is `LATENT_SBVC_ROUTE_MODE=safe_similarity`.
+For the matched 1,500-image mechanism subset, set
+`LATENT_SBVC_ROUTE_MODE=safe_distance` for eligible-pool geometry matching or
+`LATENT_SBVC_ROUTE_MODE=global_similarity` for the unconstrained similarity
+control. Keep all other SBVC settings fixed.
+
 Rate sweep:
 
 ```bash
 bash scripts/launch_latent_codes_sbvc_rebinned36500_r_sweep.sh
 ```
+
+## Face-Domain Protocol
+
+The supplementary face protocol uses the PUT FFHQ checkpoint and the Latent
+Codes CelebA-HQ checkpoint family. Place the latter under either `ckpts/` or
+`ckpts/CelebA-HQ/` with these names:
+
+```text
+celeba_vqgan.ckpt
+celeba_encoder.ckpt
+celeba_decoder.ckpt
+celeba_transformer.ckpt
+```
+
+Pass `configs/celeba_inpainting.yaml` through `--config` when running
+`tools/evaluate_latent_codes.py`. The submitted protocol evaluates the fixed
+FFHQ validation set of 1,000 images and a fixed CelebA-HQ validation set of
+2,000 images, using the same six mask-ratio buckets and seeds as the main
+evaluation.
 
 ## Expected Main Results
 

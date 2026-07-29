@@ -53,8 +53,20 @@ class RepositoryLayoutTest(unittest.TestCase):
 
         self.assertIn("PUT_GA_SPG_LITE_LAMBDA", put_source)
         self.assertIn("PUT_GA_SPG_LITE_W_TEXTURE", put_source)
+        self.assertIn("PUT_ABLATE_VALID_TOKEN_RESTRICTION", put_source)
         self.assertIn("LATENT_SBVC_MODE", latent_source)
         self.assertIn("LATENT_SBVC_LAYER_IDS", latent_source)
+        self.assertIn("LATENT_SBVC_ROUTE_MODE", latent_source)
+        self.assertIn("safe_distance", latent_source)
+        self.assertIn("global_similarity", latent_source)
+
+    def test_latent_adapter_supports_face_checkpoints(self):
+        adapter_source = (
+            REPO_ROOT / "tools" / "baseline_adapters" / "run_latent_codes_places2_fv.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("CELEBA_EXPECTED_CKPTS", adapter_source)
+        self.assertIn("celeba_vqgan.ckpt", adapter_source)
+        self.assertIn("route_mode", adapter_source)
 
     def test_result_table_contains_both_hosts(self):
         path = REPO_ROOT / "results" / "paper_main_results.csv"

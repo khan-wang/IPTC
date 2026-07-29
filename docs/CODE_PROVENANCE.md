@@ -38,6 +38,12 @@ tools/baseline_adapters/run_latent_codes_places2_fv.py
 tools/baseline_adapters/eval_places2_fv_outputs.py
 ```
 
+The unified repository also incorporates the paper-relevant uncommitted state
+audited on the 5090 workstation on 2026-07-29: the Latent Codes route-mode
+controls, CelebA-HQ checkpoint resolution, and the PUT structure ablations.
+Machine-specific launch paths, logs, generated outputs, and internal report
+builders were excluded.
+
 ## Asset Provenance
 
 `assets/method_overview.png` is a raster export of the final manuscript
