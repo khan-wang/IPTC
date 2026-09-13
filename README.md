@@ -1,168 +1,111 @@
-# SBVC
+# IPTC
 
-Official implementation of **SBVC: Plug-and-Play Structure-Bounded
-Visible-Token Compression for Transformer-Based Image Inpainting**.
+Core implementation of **Compress the Context, Preserve the Interface:
+Efficient Transformer Inpainting through Interface-Preserving Token Coarsening**.
 
-SBVC compresses only visible tokens that are separated from the inpainting
-mask boundary. Protected tokens remain unchanged, eligible tokens are merged
-inside the Transformer core, and the compact sequence is restored to the
-original topology before decoding. The repository contains the two paper
-backbones:
+IPTC preserves singleton tokens at the mask and its eight-connected known-side
+interface, coarsens the remaining background, and reconstructs the original
+grid through the retained group map. Static input routing, tail-block output
+liveness, and aligned budgets turn the compact representation into an efficient
+inference path. Pretrained weights and the 20-token reveal quota are unchanged.
 
-- PUT with risk-calibrated eligible-token matching.
-- Latent Codes with late-layer QKV compression and a cached route.
+## Results
 
-The method is training-free for the reported pretrained checkpoints.
+PUT is the dense backbone reference. These measurements use the same FP32,
+batch-one RTX 5090 protocol and the pretrained NaturalScene 256 checkpoint.
 
-![SBVC method overview](assets/method_overview.png)
+| Collection | Method | RGB PSNR | LPIPS | Time (ms) | Peak allocated (MiB) |
+|---|---|---:|---:|---:|---:|
+| Places 1500 | PUT backbone | 25.066 | 0.14835 | 184.004 | 656.949 |
+| Places 1500 | IPTC | 25.123 | 0.14877 | 148.405 | 560.550 |
+| COCO 600 | PUT backbone | 23.779 | 0.15185 | 184.072 | 656.768 |
+| COCO 600 | IPTC | 23.847 | 0.15236 | 148.093 | 560.677 |
 
-## Main Results
+Five-method tables including ToMe-SD, SiTo, and ToMA adapters are in
+[results/iptc](results/iptc). IPTC approaches dense reconstruction quality and
+provides higher quality than the tested reduction adapters at comparable
+latency. Peak memory describes the complete protocol, not coarsening alone.
+The Places list is a fixed Places365-derived collection, not an official
+Places2 test-split claim. Forward/reverse orders share image identities.
 
-The table reports the principal operating point for each host on the fixed
-36,500-image Places2/NaturalScene protocol.
+## Core code
 
-| Backbone | Method | Setting | PSNR | SSIM | LPIPS | Core GMACs/image | GMAC reduction | Realized CR |
-|---|---|---|---:|---:|---:|---:|---:|---:|
-| PUT | Dense | - | 25.3055 | 0.8536 | 0.1490 | 2204.6158 | 0.00% | 0.0000 |
-| PUT | SBVC | r224 | 25.3632 | 0.8530 | 0.1524 | 1803.7837 | 18.18% | 0.1762 |
-| Latent Codes | Dense | - | 24.9776 | 0.8404 | 0.139211 | 16.8396 | 0.00% | 0.0000 |
-| Latent Codes | SBVC | QKV-r64, layers 20-39 | 24.9909 | 0.8404 | 0.139209 | 13.1685 | 21.80% | 0.1245 |
+- [PUT integration](third_party/PUT/image_synthesis/modeling/models/masked_image_inpainting_transformer.py)
+- [Public configuration and per-image context](iptc/__init__.py)
+- [Interface-aware matching](iptc/routing.py)
+- [Static route reuse and output liveness](iptc/liveness.py)
+- [SDPA execution](iptc/execution.py)
+- [Source hashes](iptc/source_hashes.json)
 
-Machine-readable values are in
-[`results/paper_main_results.csv`](results/paper_main_results.csv).
+The implementation is a PUT overlay with extracted inference interventions.
+It uses the bundled host, codec, and official checkpoint; it is not a standalone
+image model. Historical identifiers such as `dirichlet` and `PUT_SAFE_TOME_R`
+remain in the implementation to preserve the evaluated configuration. The
+pair score is a distance-modulated selection surrogate.
 
-![Quality-compute operating points](assets/quality_compute.png)
+## Installation and integration
 
-## Qualitative Results
+Clone this repository and install the PUT runtime dependencies described in
+[docs/INSTALL.md](docs/INSTALL.md), including the official PUT checkpoint.
+The recorded environment used Python 3.10, PyTorch 2.9/CUDA 12.8 and torchvision
+0.24. Existing installation and checkpoint instructions remain applicable;
+the **IPTC configuration below supersedes the old SBVC paper settings**.
 
-The original `media/main.gif` in this repository belonged to the upstream
-Latent Codes project. The figure below is the actual SBVC comparison used by
-the manuscript.
+```python
+import torch
+from iptc import configure_environment, inference_context
 
-![Dense host and SBVC qualitative comparison](assets/qualitative_comparison.png)
-
-## Repository Layout
-
-```text
-.
-|-- assets/                         # Paper figures used by this README
-|-- docs/                           # Installation, reproduction, provenance
-|-- results/                        # Machine-readable paper results
-|-- scripts/                        # Reproduction launchers
-|-- third_party/
-|   |-- PUT/                        # PUT host with the SBVC integration
-|   `-- baselines/
-|       `-- latent-code-inpainting/ # Latent Codes host with SBVC integration
-`-- tools/                          # Evaluation and route-analysis utilities
+configure_environment()  # Before the bundled PUT model is constructed.
+# model = ...           # Load the official PUT checkpoint using its loader.
+# batch = ...           # PUT input dictionary: image, mask, relative_path.
+model.eval()
+seed = 20260908
+torch.manual_seed(seed)
+torch.cuda.manual_seed_all(seed)
+with torch.inference_mode(), inference_context(model, "example.png", seed):
+    result = model.generate_content(
+        batch=batch, filter_ratio=200, filter_type="count", replicate=1,
+        with_process_bar=False, mask_low_to_high=False,
+        sample_largest=True, calculate_acc_and_prob=False,
+        num_token_per_iter=20, accumulate_time=None, raster_order=False,
+    )
 ```
 
-## Installation
+Use FP32, CUDA, batch one, and a fresh context for each image. Keep the same
+image/mask preprocessing as PUT. `configure_environment` clears inherited
+`PUT_*` flags; call it in a dedicated inference process. The initial host r224
+value is replaced on the first routing call by the evaluated cap256/128-aligned
+per-image capacity rule. The runtime wrapper must be enabled; setting the
+environment alone does not activate the complete IPTC protocol.
 
-The paper experiments used Python 3.10.19, PyTorch 2.9.0+cu128, torchvision
-0.24.0+cu128, and an NVIDIA RTX 5090. The two upstream hosts have additional
-legacy dependencies, so a clean Conda environment is recommended. Use the root
-`requirements-runtime.txt`; the dependency files inside `third_party/` are
-retained for provenance and target obsolete host environments.
+For end-to-end measurement, warm up first, synchronize CUDA around generation,
+and separate model execution from loading, disk I/O and metric calculation.
+Do not run latency tests alongside another GPU workload. This release adds
+the core inference path and aggregate results; a turnkey frozen-dataset
+evaluation package is not included in this update.
 
-See [`docs/INSTALL.md`](docs/INSTALL.md) for host-specific setup and checkpoint
-placement, including installation on an offline compute node.
-
-## Quick Start
-
-All private machine paths were removed from the launchers. Set the required
-paths explicitly:
+## Verification and scope
 
 ```bash
-export PYTHON_BIN="$(command -v python)"
-export PUT_CHECKPOINT=/path/to/put/checkpoint.pth
-export SBVC_IMAGE_ROOT=/path/to/places365/val_large
-export SBVC_MASK_ROOT=/path/to/testing_mask_dataset
+python tools/verify_iptc_release.py
 ```
 
-Run a PUT sanity evaluation:
+This checks syntax, local module dependencies, source hashes and configuration
+with the standard library. The extracted source has historical GPU evaluation
+evidence; the public wrapper still requires a checkpoint-backed smoke test in
+the target environment. No model inference runs as part of this verifier.
+The reported acceleration applies to FP32 PUT. Low-precision and multibranch
+transfer diagnostics did not reproduce that acceleration.
 
-```bash
-PYTHONPATH="$PWD/tools:$PWD/third_party/PUT" \
-"$PYTHON_BIN" tools/evaluate_put.py \
-  --put-root "$PWD/third_party/PUT" \
-  --checkpoint "$PUT_CHECKPOINT" \
-  --image-root "$SBVC_IMAGE_ROOT" \
-  --mask-root "$SBVC_MASK_ROOT" \
-  --output-dir runs/put_sanity \
-  --dataset-name "Places2/NaturalScene sanity" \
-  --samples-per-bucket 2
-```
+## Historical files and attribution
 
-Run Latent Codes with the paper operating point:
+Older SBVC launchers, results, and Latent Codes integrations remain for
+backward compatibility. They are not IPTC results or IPTC backbone evidence.
+Use `iptc/` and `results/iptc/` for the current method.
 
-```bash
-bash scripts/launch_latent_codes_sbvc_rebinned36500_full.sh
-```
-
-The complete protocol and expected manifest layout are documented in
-[`docs/REPRODUCE.md`](docs/REPRODUCE.md).
-
-## Paper Configurations
-
-### PUT
-
-```bash
-PUT_BOUNDARY_SPLIT=1
-PUT_SAFE_TOME_R=224
-PUT_SAFE_TOME_SCORE_MODE=ga_spg_lite
-PUT_GA_SPG_LITE_LAMBDA=0.20
-PUT_GA_SPG_LITE_W_TEXTURE=0.45
-PUT_GA_SPG_LITE_W_BOUNDARY=0.35
-PUT_GA_SPG_LITE_W_SMOOTHNESS=0.20
-PUT_GA_SPG_LITE_PAD_MODE=zero
-PUT_GA_SPG_LITE_OPTIMIZED=1
-```
-
-### Latent Codes
-
-```bash
-LATENT_SBVC_ENABLE=1
-LATENT_SBVC_R=64
-LATENT_SBVC_MODE=qkv
-LATENT_SBVC_ROUTE_MODE=safe_similarity
-LATENT_SBVC_LAYER_IDS=20-39
-LATENT_SBVC_ROUTE_CACHE=1
-```
-
-`LATENT_SBVC_ROUTE_MODE` also accepts `safe_distance` and
-`global_similarity` for the matched mechanism controls reported in the paper.
-The PUT ablations use `PUT_BOUNDARY_RING_RADIUS=0` and
-`PUT_ABLATE_VALID_TOKEN_RESTRICTION=1`, respectively.
-
-## Checkpoints and Data
-
-Weights, datasets, generated images, and full evaluation outputs are not
-committed. Download PUT and Latent Codes checkpoints from their official
-projects, then place or link them as described in `docs/INSTALL.md`.
-
-## Citation
-
-```bibtex
-@misc{wang2026sbvc,
-  title  = {SBVC: Plug-and-Play Structure-Bounded Visible-Token Compression
-            for Transformer-Based Image Inpainting},
-  author = {Kehan Wang and Hong Peng and Weifa Zheng and Guosheng Lan and Ying Yu},
-  year   = {2026},
-  note   = {Manuscript under review}
-}
-```
-
-## Acknowledgments
-
-This implementation builds on
-[PUT](https://github.com/liuqk3/PUT),
-[Latent Codes](https://github.com/nintendops/latent-code-inpainting), and
-[Token Merging](https://github.com/facebookresearch/ToMe).
-See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) for source and license
-details.
-
-## License
-
-Third-party components retain their original licenses. A repository-wide
-license for the SBVC modifications has not yet been granted; see
-[`LICENSE.md`](LICENSE.md).
+Built on [PUT](https://github.com/liuqk3/PUT) and the bipartite matching
+primitive of [ToMe](https://github.com/facebookresearch/ToMe). Third-party
+code retains its existing notices and license terms; see
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [LICENSE.md](LICENSE.md).
+No pretrained weights, private datasets, credentials, or internal research
+notes are included in this update.

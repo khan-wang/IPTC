@@ -1,0 +1,27 @@
+[
+  {
+    "module": "iptc/base.py",
+    "source_sha256": "b722488735011c280725cae8144117190e8a579656855de7a90fe11367ad4c97",
+    "release_sha256": "62d014c6e0acfa7dbe3ff9ac0608e6648ef903b81659f79af3fb7ec75f0cf5d8"
+  },
+  {
+    "module": "iptc/liveness.py",
+    "source_sha256": "aa0b0082db66d73ed06a737230cb4a04c17a398fc40c9856bb6668e0db689453",
+    "release_sha256": "43ad042c9ae12473f92d423320eb3d0eaf009defd96b54027d7f377e8d51b682"
+  },
+  {
+    "module": "iptc/execution.py",
+    "source_sha256": "bd0e7307bc751cca9e45c0160b71d4dcf9379020c9ea66275b1c775f9af26883",
+    "release_sha256": "7e4a841eb23f8227b69666301b0b7101061f43053eb9deb0af177446c3f209aa"
+  },
+  {
+    "module": "iptc/routing.py",
+    "source_sha256": "0c1f883c15288f39acb9ef5b7aa759d3fefea6d1e799a83d391f290f69a46883",
+    "release_sha256": "6106d048f1cf768a222c7892e5f9306cf9e5d46a218fbf78b9ab99e41299365e"
+  },
+  {
+    "module": "third_party/PUT/image_synthesis/modeling/models/masked_image_inpainting_transformer.py",
+    "source_sha256": "006d18e4ea0eebbdfb996fec664b53f77b25e87ea9e0d864e62c19dbab2e46de",
+    "release_sha256": "006d18e4ea0eebbdfb996fec664b53f77b25e87ea9e0d864e62c19dbab2e46de"
+  }
+]

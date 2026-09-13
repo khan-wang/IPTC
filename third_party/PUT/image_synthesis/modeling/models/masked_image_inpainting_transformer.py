@@ -908,16 +908,33 @@ class MaskedImageInpaintingTransformer(nn.Module):
             self.safe_tome_debug_enabled = gaspg_debug_enabled and self.safe_tome_enabled
             self.ga_spg_audit_enabled = gaspg_debug_enabled
         self.safe_tome_score_mode = os.environ.get('PUT_SAFE_TOME_SCORE_MODE', 'similarity').strip().lower()
-        if self.safe_tome_score_mode not in {'similarity', 'distance', 'ga_spg_soft', 'ga_spg_hardveto', 'ga_spg_lite'}:
+        if self.safe_tome_score_mode not in {
+            'similarity',
+            'distance',
+            'ga_spg_soft',
+            'ga_spg_hardveto',
+            'ga_spg_lite',
+            'heat_kernel',
+            'dirichlet',
+            'sinkhorn_proxy',
+        }:
             raise ValueError(
                 "PUT_SAFE_TOME_SCORE_MODE must be one of "
-                "{'similarity', 'distance', 'ga_spg_soft', 'ga_spg_hardveto', 'ga_spg_lite'}, "
+                "{'similarity', 'distance', 'ga_spg_soft', 'ga_spg_hardveto', 'ga_spg_lite', "
+                "'heat_kernel', 'dirichlet', 'sinkhorn_proxy'}, "
                 f"got {self.safe_tome_score_mode!r}."
             )
         self.ga_spg_pair_mode = self.safe_tome_score_mode in {'ga_spg_soft', 'ga_spg_hardveto'}
         self.ga_spg_lite_mode = self.safe_tome_score_mode == 'ga_spg_lite'
         self.ga_spg_mode = self.ga_spg_pair_mode or self.ga_spg_lite_mode
-        self.ga_spg_guidance_enabled = self.ga_spg_mode or self.ga_spg_audit_enabled
+        self.experimental_score_mode = self.safe_tome_score_mode in {
+            'heat_kernel',
+            'dirichlet',
+            'sinkhorn_proxy',
+        }
+        self.ga_spg_guidance_enabled = (
+            self.ga_spg_mode or self.experimental_score_mode or self.ga_spg_audit_enabled
+        )
         self.ga_spg_lite_optimized = os.environ.get('PUT_GA_SPG_LITE_OPTIMIZED', '0') == '1'
         self.ga_spg_lite_runtime_cache_enabled = os.environ.get(
             'PUT_GA_SPG_LITE_RUNTIME_CACHE',
@@ -946,6 +963,12 @@ class MaskedImageInpaintingTransformer(nn.Module):
         self.ga_spg_lite_image_border_weight = float(os.environ.get('PUT_GA_SPG_LITE_W_IMAGE_BORDER', '0.20'))
         self.ga_spg_hard_risk_threshold = float(os.environ.get('PUT_GA_SPG_HARD_THRESHOLD', '0.65'))
         self.ga_spg_hard_penalty = float(os.environ.get('PUT_GA_SPG_HARD_PENALTY', '1000000.0'))
+        self.experimental_heat_t = float(os.environ.get('PUT_EXPERIMENT_HEAT_T', '2.0'))
+        self.experimental_heat_sigma_g = float(os.environ.get('PUT_EXPERIMENT_HEAT_SIGMA_G', '0.5'))
+        self.experimental_heat_gamma = float(os.environ.get('PUT_EXPERIMENT_HEAT_GAMMA', '1.0'))
+        self.experimental_dirichlet_mu = float(os.environ.get('PUT_EXPERIMENT_DIRICHLET_MU', '0.10'))
+        self.experimental_sinkhorn_eps = float(os.environ.get('PUT_EXPERIMENT_SINKHORN_EPS', '0.05'))
+        self.experimental_sinkhorn_iters = int(os.environ.get('PUT_EXPERIMENT_SINKHORN_ITERS', '10'))
         ga_spg_weights = dict(self.ga_spg_lite_weights) if self.ga_spg_lite_mode else dict(self.ga_spg_weights)
         ga_spg_lambda = self.ga_spg_lite_lambda_risk if self.ga_spg_lite_mode else self.ga_spg_lambda_risk
         if self.ga_spg_lite_mode:
@@ -2110,6 +2133,101 @@ class MaskedImageInpaintingTransformer(nn.Module):
             'fallback_reason': '',
         }
 
+    def _build_experimental_pair_metric(self, eligible_seq, selection_plan, guidance, batch_idx, runtime_plan=None):
+        """Evaluate isolated score hypotheses while retaining the production merge/lift path."""
+        if runtime_plan is not None:
+            src_local = runtime_plan['src_local']
+            dst_local = runtime_plan['dst_local']
+            src_distance = runtime_plan['src_distance']
+            dst_distance = runtime_plan['dst_distance']
+            src_coords = runtime_plan['src_coords']
+            dst_coords = runtime_plan['dst_coords']
+        else:
+            local = guidance['local_variance_risk'][batch_idx].view(-1)
+            distance = guidance['distance_raw'][batch_idx].view(-1)
+            coords = guidance['token_coords'][batch_idx].view(-1, 2)
+            src_idx = selection_plan['even_idx']
+            dst_idx = selection_plan['odd_idx']
+            src_local = local.index_select(0, src_idx)
+            dst_local = local.index_select(0, dst_idx)
+            src_distance = distance.index_select(0, src_idx).float()
+            dst_distance = distance.index_select(0, dst_idx).float()
+            src_coords = coords.index_select(0, src_idx).float()
+            dst_coords = coords.index_select(0, dst_idx).float()
+
+        src_proj = eligible_seq[::2]
+        dst_proj = eligible_seq[1::2]
+        base_metric = self._pairwise_cosine(src_proj, dst_proj)
+        pair_l2 = self._pairwise_l2(src_proj, dst_proj)
+        pair_boundary_distance_min = torch.minimum(src_distance.unsqueeze(1), dst_distance.unsqueeze(0))
+        pair_spatial_distance = self._pairwise_l2(src_coords, dst_coords)
+
+        mode = self.safe_tome_score_mode
+        if mode == 'heat_kernel':
+            t = max(float(self.experimental_heat_t), 1.0e-6)
+            sigma_g = max(float(self.experimental_heat_sigma_g), 1.0e-6)
+            gamma = max(float(self.experimental_heat_gamma), 0.0)
+            src_k = torch.exp(-src_distance.square() / (4.0 * t))
+            src_k = src_k * torch.exp(-src_local.square() / (2.0 * sigma_g * sigma_g))
+            dst_k = torch.exp(-dst_distance.square() / (4.0 * t))
+            dst_k = dst_k * torch.exp(-dst_local.square() / (2.0 * sigma_g * sigma_g))
+            src_gate = 1.0 - src_k / (1.0 + gamma * src_local)
+            dst_gate = 1.0 - dst_k / (1.0 + gamma * dst_local)
+            adjusted_metric = base_metric * src_gate.unsqueeze(1) * dst_gate.unsqueeze(0)
+            risk_penalty = 1.0 - src_gate.unsqueeze(1) * dst_gate.unsqueeze(0)
+        elif mode == 'dirichlet':
+            mu = max(float(self.experimental_dirichlet_mu), 0.0)
+            delta = (1.0 - base_metric).clamp(min=0.0) * pair_l2.square()
+            delta = delta + mu * (
+                1.0 / (src_distance.unsqueeze(1) + 1.0e-6)
+                + 1.0 / (dst_distance.unsqueeze(0) + 1.0e-6)
+            )
+            adjusted_metric = -delta
+            risk_penalty = delta
+        elif mode == 'sinkhorn_proxy':
+            eps = max(float(self.experimental_sinkhorn_eps), 1.0e-4)
+            kernel = torch.exp((base_metric - base_metric.max()).clamp(min=-80.0) / eps)
+            for _ in range(max(int(self.experimental_sinkhorn_iters), 1)):
+                kernel = kernel / kernel.sum(dim=1, keepdim=True).clamp(min=1.0e-8)
+                kernel = kernel / kernel.sum(dim=0, keepdim=True).clamp(min=1.0e-8)
+            transport_score = torch.log(kernel.clamp(min=1.0e-8))
+            adjusted_metric = transport_score
+            risk_penalty = -transport_score
+        else:
+            raise ValueError(f'unsupported experimental score mode: {mode}')
+
+        zero_matrix = torch.zeros_like(base_metric)
+        pair_local_risk = 0.5 * (src_local.unsqueeze(1) + dst_local.unsqueeze(0))
+        return {
+            'base_metric': base_metric,
+            'risk_penalty': risk_penalty,
+            'adjusted_metric': adjusted_metric,
+            'pair_cos_raw': base_metric,
+            'pair_cos_3x3': zero_matrix,
+            'pair_cos_9x9': zero_matrix,
+            'pair_feature_l2_raw': pair_l2,
+            'pair_feature_l2_3x3': zero_matrix,
+            'pair_feature_l2_9x9': zero_matrix,
+            'pair_local_variance_risk': pair_local_risk,
+            'pair_context_variance_risk': pair_local_risk,
+            'pair_boundary_distance_min': pair_boundary_distance_min,
+            'pair_spatial_distance': pair_spatial_distance,
+            'pair_boundary_distance_src': src_distance,
+            'pair_boundary_distance_dst': dst_distance,
+            'pair_context_risk_src': src_local,
+            'pair_context_risk_dst': dst_local,
+            'pair_local_risk_src': src_local,
+            'pair_local_risk_dst': dst_local,
+            'invalid_pair_mask': torch.zeros_like(base_metric, dtype=torch.bool),
+            'high_risk_mask': torch.zeros_like(base_metric, dtype=torch.bool),
+            'feasible_pair_count': int(base_metric.shape[-2]),
+            'invalid_pair_count': 0,
+            'high_risk_pair_count': 0,
+            'under_compression': False,
+            'fallback_used': False,
+            'fallback_reason': '',
+        }
+
     def _build_safe_tome_state(self, emb, boundary_split, similarity_guidance):
         if not self.safe_tome_enabled:
             return None
@@ -2181,10 +2299,19 @@ class MaskedImageInpaintingTransformer(nn.Module):
 
             if eligible_idx.numel() >= 2:
                 merge_meta = None
-                if self.ga_spg_mode:
+                if self.ga_spg_mode or self.experimental_score_mode:
                     score_handle = self._phase4a_start_timing('Time_Scoring')
                     pair_metric = None
-                    if self.ga_spg_lite_mode and self.ga_spg_lite_optimized and not self.safe_tome_debug_enabled:
+                    if self.experimental_score_mode:
+                        pair_debug = self._build_experimental_pair_metric(
+                            eligible_seq=eligible_seq,
+                            selection_plan=selection_plan,
+                            guidance=similarity_guidance,
+                            batch_idx=batch_idx,
+                            runtime_plan=runtime_plan,
+                        )
+                        pair_metric = pair_debug['adjusted_metric']
+                    elif self.ga_spg_lite_mode and self.ga_spg_lite_optimized and not self.safe_tome_debug_enabled:
                         pair_metric = self._build_ga_spg_lite_adjusted_metric_fast(
                             eligible_seq=eligible_seq,
                             runtime_plan=runtime_plan,
@@ -2567,12 +2694,13 @@ class MaskedImageInpaintingTransformer(nn.Module):
         signature = [
             self._safe_tome_selection_signature(boundary_split, similarity_guidance),
             bool(self.ga_spg_lite_mode),
+            bool(self.experimental_score_mode),
             bool(self.ga_spg_lite_optimized),
             bool(self.ga_spg_lite_runtime_cache_enabled),
             self.ga_spg_lite_pad_mode if self.ga_spg_lite_mode else 'n/a',
             bool(self.ga_spg_lite_explicit_border_risk),
         ]
-        if self.ga_spg_lite_mode and similarity_guidance is not None:
+        if (self.ga_spg_lite_mode or self.experimental_score_mode) and similarity_guidance is not None:
             for key in ('scalar_risk', 'local_variance_risk', 'smoothness_risk', 'distance_raw'):
                 tensor = similarity_guidance.get(key)
                 if tensor is None:
@@ -2584,7 +2712,7 @@ class MaskedImageInpaintingTransformer(nn.Module):
     def _build_safe_tome_runtime_cache(self, boundary_split, similarity_guidance):
         signature = self._safe_tome_runtime_signature(boundary_split, similarity_guidance)
         use_runtime_cache = bool(
-            self.ga_spg_lite_mode
+            (self.ga_spg_lite_mode or self.experimental_score_mode)
             and self.ga_spg_lite_optimized
             and self.ga_spg_lite_runtime_cache_enabled
         )
@@ -2632,18 +2760,25 @@ class MaskedImageInpaintingTransformer(nn.Module):
             'plans': [],
         }
 
-        if self.ga_spg_lite_mode and similarity_guidance is not None and self.ga_spg_lite_optimized:
+        if (self.ga_spg_lite_mode or self.experimental_score_mode) and similarity_guidance is not None and self.ga_spg_lite_optimized:
             scalar_risk_flat = similarity_guidance.get('scalar_risk_flat')
             if scalar_risk_flat is None:
-                scalar_risk_flat = similarity_guidance['scalar_risk'].view(b, num_tokens)
+                scalar_risk = similarity_guidance.get('scalar_risk')
+                if scalar_risk is None:
+                    scalar_risk_flat = torch.zeros((b, num_tokens), device=device, dtype=dtype)
+                else:
+                    scalar_risk_flat = scalar_risk.view(b, num_tokens)
             local_risk_flat = similarity_guidance.get('local_variance_risk_flat')
-            if local_risk_flat is None and self.safe_tome_debug_enabled:
+            if local_risk_flat is None and (self.safe_tome_debug_enabled or self.experimental_score_mode):
                 local_risk_flat = similarity_guidance['local_variance_risk'].view(b, num_tokens)
             smoothness_risk_flat = similarity_guidance.get('smoothness_risk_flat')
-            if smoothness_risk_flat is None and self.safe_tome_debug_enabled:
-                smoothness_risk_flat = similarity_guidance['smoothness_risk'].view(b, num_tokens)
+            if smoothness_risk_flat is None and (self.safe_tome_debug_enabled or self.experimental_score_mode):
+                smoothness_risk = similarity_guidance.get('smoothness_risk')
+                if smoothness_risk is None:
+                    smoothness_risk_flat = torch.zeros((b, num_tokens), device=device, dtype=dtype)
+                else:
+                    smoothness_risk_flat = smoothness_risk.view(b, num_tokens)
 
-            lambda_risk = float(self.ga_spg_lite_lambda_risk)
             for batch_idx in range(b):
                 selection_plan = selection['plans'][batch_idx]
                 plan = {
@@ -2655,9 +2790,9 @@ class MaskedImageInpaintingTransformer(nn.Module):
                 dst_scalar = scalar_risk_flat[batch_idx].index_select(0, odd_idx).contiguous()
                 plan['src_scalar'] = src_scalar
                 plan['dst_scalar'] = dst_scalar
-                plan['src_penalty'] = (src_scalar * lambda_risk).contiguous()
-                plan['dst_penalty'] = (dst_scalar * lambda_risk).contiguous()
-                if self.safe_tome_debug_enabled:
+                plan['src_penalty'] = (src_scalar * self.ga_spg_lite_lambda_risk).contiguous()
+                plan['dst_penalty'] = (dst_scalar * self.ga_spg_lite_lambda_risk).contiguous()
+                if self.safe_tome_debug_enabled or self.experimental_score_mode:
                     current_distance = distance_raw_flat[batch_idx]
                     current_coords = token_coords_flat[batch_idx]
                     current_local = local_risk_flat[batch_idx]
@@ -3105,7 +3240,10 @@ class MaskedImageInpaintingTransformer(nn.Module):
 
             transformer_blocks_handle = self._phase5f_start_timing('transformer_blocks_time')
             for block_idx in range(len(self.blocks)):   
-                emb, att_w = self.blocks[block_idx](emb, mask=attn_mask) # B x H x W x D, B x H x W x H x W
+                if block_idx == len(self.blocks)-1 and hasattr(self, '_live_tail_forward'):
+                    emb, att_w = self._live_tail_forward(emb, attn_mask, ~content_mask, safe_tome_state)
+                else:
+                    emb, att_w = self.blocks[block_idx](emb, mask=attn_mask) # B x H x W x D, B x H x W x H x W
             self._phase5f_end_timing(transformer_blocks_handle)
 
             if safe_tome_state is not None:
@@ -3121,14 +3259,25 @@ class MaskedImageInpaintingTransformer(nn.Module):
             emb = emb.permute(0, 3, 1, 2) # B x D x H/cps x W/cps
             emb = pixel_shuffle(emb, out_size=(h, w), chunked=True) # B x C x H x W
             emb = emb.permute(0, 2, 3, 1) # B x H x W x C
-            logits = self.to_logits(emb) # B x  H x W x Cls
+            if hasattr(self, '_live_sample_forward'):
+                logits, live_selection_scores, sample = self._live_sample_forward(
+                    emb, content_mask, sn, filter_ratio, filter_type, temperature,
+                    raster_order, calculate_acc_and_prob)
+                logits_filter = probs = None
+            elif hasattr(self, '_live_output_forward'):
+                logits, logits_filter, probs, live_selection_scores = self._live_output_forward(
+                    emb, ~content_mask, filter_ratio, filter_type, temperature, calculate_acc_and_prob)
+            else:
+                live_selection_scores = None
+                logits = self.to_logits(emb) # B x H x W x Cls
+                logits_filter = logits_top_k(logits, filter_ratio=filter_ratio, minimum=1, filter_type=filter_type)
+                probs = F.softmax(logits_filter * temperature, dim=-1)
 
             forward_time += time.time() - tic_forward
 
             # for each position, only keep the topk probabilities
-            logits_filter = logits_top_k(logits, filter_ratio=filter_ratio, minimum=1, filter_type=filter_type) # B x H x W x Cls
-            probs = F.softmax(logits_filter * temperature, dim=-1) # B x H x W x Cls
-            sample = torch.multinomial(probs.view(-1, probs.shape[-1]), 1).view(*probs.shape[:3]) # B x H x W
+            if not hasattr(self, '_live_sample_forward'):
+                sample = torch.multinomial(probs.view(-1, probs.shape[-1]), 1).view(*probs.shape[:3]) # B x H x W
             
             if sn == -1 or sn >= h*w:
                 content_token = content_token * content_mask + sample * (~content_mask)
@@ -3143,7 +3292,10 @@ class MaskedImageInpaintingTransformer(nn.Module):
                     _, pos = torch.topk(index_raster, dim=1, k=sn) # B x num, in range [0, HW)
                     pos_mask = torch.zeros_like(index_raster).float().scatter_(1, pos, 1.0).to(content_mask.dtype) # B x HW
                 else:
-                    logits_max, _ = logits_filter.max(dim=-1) # B x H x W
+                    if live_selection_scores is not None:
+                        logits_max = live_selection_scores
+                    else:
+                        logits_max, _ = logits_filter.max(dim=-1) # B x H x W
                     logits_max.masked_fill_(content_mask, float('-inf')) # set the logits for those unmasked tokens to -inf
                     logits_max = logits_max.view(-1, h*w) # B x HW
                     _, pos = torch.topk(logits_max, dim=1, k=sn) # B x num, in range [0, HW)
