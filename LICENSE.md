@@ -1,10 +1,12 @@
-# License Notice
+# License notice
 
-No repository-wide license is granted for the SBVC-specific modifications,
-documentation, or paper assets at this time.
+No repository-wide open-source license is granted for the IPTC-specific code,
+documentation, or paper assets at this time. Permission for reuse or
+redistribution of the IPTC-specific materials should be obtained from the
+authors.
 
-Third-party components retain their original licenses. See
-`THIRD_PARTY_NOTICES.md` and the license files under `third_party/`.
+Third-party components retain their original licenses and attribution
+requirements. See [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and the
+license files under `third_party/`.
 
-Contact the authors before redistributing or using the SBVC-specific
-modifications outside academic review and reproducibility.
+

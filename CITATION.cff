@@ -1,6 +1,6 @@
 cff-version: 1.2.0
-message: "If you use this code, please cite the SBVC manuscript."
-title: "SBVC: Plug-and-Play Structure-Bounded Visible-Token Compression for Transformer-Based Image Inpainting"
+message: "If you use IPTC or its released results, please cite the associated manuscript and this repository."
+title: "Compress the Context, Preserve the Interface: Efficient Transformer Inpainting through Interface-Preserving Token Coarsening"
 type: software
 authors:
   - family-names: Wang
@@ -13,6 +13,14 @@ authors:
     given-names: Guosheng
   - family-names: Yu
     given-names: Ying
-repository-code: "https://github.com/khan-wang/Latent-Codes-SBVC"
-version: 0.1.0
-date-released: 2026-07-29
+repository-code: "https://github.com/khan-wang/IPTC"
+version: "0.2.0"
+date-released: "2026-09-29"
+abstract: "Reference implementation and aggregate benchmark results for interface-preserving token coarsening and output-liveness pruning in Transformer-based image inpainting."
+keywords:
+  - image inpainting
+  - token coarsening
+  - efficient Transformer inference
+  - visual reconstruction
+
+

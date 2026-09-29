@@ -1,111 +1,159 @@
 # IPTC
 
-Core implementation of **Compress the Context, Preserve the Interface:
-Efficient Transformer Inpainting through Interface-Preserving Token Coarsening**.
+Reference implementation and aggregate benchmark results for:
 
-IPTC preserves singleton tokens at the mask and its eight-connected known-side
-interface, coarsens the remaining background, and reconstructs the original
-grid through the retained group map. Static input routing, tail-block output
-liveness, and aligned budgets turn the compact representation into an efficient
-inference path. Pretrained weights and the 20-token reveal quota are unchanged.
+> **Compress the Context, Preserve the Interface: Efficient Transformer Inpainting through Interface-Preserving Token Coarsening**
 
-## Results
+IPTC is an inference-time overlay for the PUT Transformer inpainting model. It
+preserves singleton tokens at the known-side mask interface, coarsens eligible
+background tokens, reconstructs the original grid through the retained group
+map, and prunes output rows whose downstream consumers are inactive. The
+release contains the evaluated inference path and does not redistribute model
+weights or benchmark data.
 
-PUT is the dense backbone reference. These measurements use the same FP32,
-batch-one RTX 5090 protocol and the pretrained NaturalScene 256 checkpoint.
+## Paper
+
+**Authors:** Kehan Wang, Hong Peng, Weifa Zheng, Guosheng Lan, and Ying Yu.
+
+The repository accompanies the manuscript and makes the core implementation,
+reported aggregates, source provenance, and verification procedure available
+for inspection.
+
+## Repository layout
+
+```text
+iptc/                         Core IPTC inference overlay
+third_party/PUT/              PUT integration and upstream notices
+results/iptc/                 Five-identity aggregate CSVs for Places and COCO
+assets/                       Method and qualitative figures
+tools/verify_iptc_release.py  Static release verification
+docs/INSTALL.md               Environment and checkpoint notes
+docs/REPRODUCE.md             Reproduction scope and measurement protocol
+CITATION.cff                  Software citation metadata
+THIRD_PARTY_NOTICES.md        Upstream attribution and license locations
+```
+
+## Main results
+
+The table reports the dense PUT backbone and the complete IPTC protocol. The
+measurements use FP32, batch size one, the NaturalScene 256 checkpoint, and a
+single RTX 5090. Model loading, disk I/O, and metric computation are excluded
+from the reported inference time.
 
 | Collection | Method | RGB PSNR | LPIPS | Time (ms) | Peak allocated (MiB) |
 |---|---|---:|---:|---:|---:|
 | Places 1500 | PUT backbone | 25.066 | 0.14835 | 184.004 | 656.949 |
-| Places 1500 | IPTC | 25.123 | 0.14877 | 148.405 | 560.550 |
+| Places 1500 | IPTC | **25.123** | 0.14877 | **148.405** | **560.550** |
 | COCO 600 | PUT backbone | 23.779 | 0.15185 | 184.072 | 656.768 |
-| COCO 600 | IPTC | 23.847 | 0.15236 | 148.093 | 560.677 |
+| COCO 600 | IPTC | **23.847** | 0.15236 | **148.093** | **560.677** |
 
-Five-method tables including ToMe-SD, SiTo, and ToMA adapters are in
-[results/iptc](results/iptc). IPTC approaches dense reconstruction quality and
-provides higher quality than the tested reduction adapters at comparable
-latency. Peak memory describes the complete protocol, not coarsening alone.
-The Places list is a fixed Places365-derived collection, not an official
-Places2 test-split claim. Forward/reverse orders share image identities.
+The complete five-identity comparisons, including ToMe-SD, SiTo, and ToMA,
+are available in [`results/iptc/`](results/iptc). IPTC reaches the dense
+backbone quality range while providing the strongest fidelity at the tested
+competitive operating point with comparable wall-clock latency. Results are
+benchmark measurements for the stated protocol and should not be interpreted
+as hardware-independent guarantees.
 
-## Core code
+## Core implementation
 
-- [PUT integration](third_party/PUT/image_synthesis/modeling/models/masked_image_inpainting_transformer.py)
-- [Public configuration and per-image context](iptc/__init__.py)
-- [Interface-aware matching](iptc/routing.py)
-- [Static route reuse and output liveness](iptc/liveness.py)
-- [SDPA execution](iptc/execution.py)
-- [Source hashes](iptc/source_hashes.json)
+- [`iptc/__init__.py`](iptc/__init__.py): public configuration and per-image context
+- [`iptc/routing.py`](iptc/routing.py): interface-aware admissible grouping
+- [`iptc/liveness.py`](iptc/liveness.py): route reuse and output liveness
+- [`iptc/execution.py`](iptc/execution.py): compact execution path
+- [`third_party/PUT/.../masked_image_inpainting_transformer.py`](third_party/PUT/image_synthesis/modeling/models/masked_image_inpainting_transformer.py): PUT integration point
+- [`iptc/source_hashes.json`](iptc/source_hashes.json): provenance hashes for extracted sources
 
-The implementation is a PUT overlay with extracted inference interventions.
-It uses the bundled host, codec, and official checkpoint; it is not a standalone
-image model. Historical identifiers such as `dirichlet` and `PUT_SAFE_TOME_R`
-remain in the implementation to preserve the evaluated configuration. The
-pair score is a distance-modulated selection surrogate.
+The implementation is a PUT overlay rather than a standalone image model. It
+requires the official PUT runtime and NaturalScene 256 checkpoint. The public
+configuration must be enabled before constructing the PUT model; an environment
+variable alone does not activate the full protocol.
 
-## Installation and integration
+## Installation and quick start
 
-Clone this repository and install the PUT runtime dependencies described in
-[docs/INSTALL.md](docs/INSTALL.md), including the official PUT checkpoint.
-The recorded environment used Python 3.10, PyTorch 2.9/CUDA 12.8 and torchvision
-0.24. Existing installation and checkpoint instructions remain applicable;
-the **IPTC configuration below supersedes the old SBVC paper settings**.
+See [`docs/INSTALL.md`](docs/INSTALL.md) for the recorded environment and
+checkpoint requirements. The integration pattern is:
 
 ```python
 import torch
 from iptc import configure_environment, inference_context
 
-configure_environment()  # Before the bundled PUT model is constructed.
-# model = ...           # Load the official PUT checkpoint using its loader.
-# batch = ...           # PUT input dictionary: image, mask, relative_path.
+configure_environment()
+# model = load_the_official_put_checkpoint(...)
+# batch = {"image": image, "mask": mask, "relative_path": "example.png"}
+
 model.eval()
-seed = 20260908
-torch.manual_seed(seed)
-torch.cuda.manual_seed_all(seed)
-with torch.inference_mode(), inference_context(model, "example.png", seed):
+with torch.inference_mode(), inference_context(model, "example.png", seed=20260908):
     result = model.generate_content(
-        batch=batch, filter_ratio=200, filter_type="count", replicate=1,
-        with_process_bar=False, mask_low_to_high=False,
-        sample_largest=True, calculate_acc_and_prob=False,
-        num_token_per_iter=20, accumulate_time=None, raster_order=False,
+        batch=batch,
+        filter_ratio=200,
+        filter_type="count",
+        replicate=1,
+        with_process_bar=False,
+        mask_low_to_high=False,
+        sample_largest=True,
+        calculate_acc_and_prob=False,
+        num_token_per_iter=20,
+        accumulate_time=None,
+        raster_order=False,
     )
 ```
 
-Use FP32, CUDA, batch one, and a fresh context for each image. Keep the same
-image/mask preprocessing as PUT. `configure_environment` clears inherited
-`PUT_*` flags; call it in a dedicated inference process. The initial host r224
-value is replaced on the first routing call by the evaluated cap256/128-aligned
-per-image capacity rule. The runtime wrapper must be enabled; setting the
-environment alone does not activate the complete IPTC protocol.
+Use the same image/mask preprocessing as PUT and create a fresh inference
+context for each image. For latency measurement, warm up the model and
+synchronize CUDA around generation; do not measure while another GPU workload
+is active.
 
-For end-to-end measurement, warm up first, synchronize CUDA around generation,
-and separate model execution from loading, disk I/O and metric calculation.
-Do not run latency tests alongside another GPU workload. This release adds
-the core inference path and aggregate results; a turnkey frozen-dataset
-evaluation package is not included in this update.
+## Verification
 
-## Verification and scope
+The release verifier performs a CPU-only static check of syntax, local module
+dependencies, source hashes, and configuration. It does not require a
+checkpoint and does not run inference:
 
 ```bash
 python tools/verify_iptc_release.py
 ```
 
-This checks syntax, local module dependencies, source hashes and configuration
-with the standard library. The extracted source has historical GPU evaluation
-evidence; the public wrapper still requires a checkpoint-backed smoke test in
-the target environment. No model inference runs as part of this verifier.
-The reported acceleration applies to FP32 PUT. Low-precision and multibranch
-transfer diagnostics did not reproduce that acceleration.
+The public release does not include a turnkey frozen-dataset benchmark runner.
+It includes the core inference overlay and aggregate results; the required
+checkpoint, benchmark images, masks, manifests, and per-image outputs remain
+outside the repository because of size, licensing, and access constraints.
+See [`docs/REPRODUCE.md`](docs/REPRODUCE.md) for the exact scope and request
+path for additional evaluation records.
 
-## Historical files and attribution
+## Data and model access
 
-Older SBVC launchers, results, and Latent Codes integrations remain for
-backward compatibility. They are not IPTC results or IPTC backbone evidence.
-Use `iptc/` and `results/iptc/` for the current method.
+The evaluation uses images from a fixed Places365-derived collection and a
+COCO collection under their respective access terms. The repository does not
+redistribute either dataset, the PUT checkpoint, or generated image outputs.
+The frozen evaluation manifests and additional per-image records can be
+provided by the corresponding author for reproducibility checks, subject to
+the relevant dataset terms.
 
-Built on [PUT](https://github.com/liuqk3/PUT) and the bipartite matching
-primitive of [ToMe](https://github.com/facebookresearch/ToMe). Third-party
-code retains its existing notices and license terms; see
-[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) and [LICENSE.md](LICENSE.md).
-No pretrained weights, private datasets, credentials, or internal research
-notes are included in this update.
+## Attribution
+
+IPTC builds on [PUT](https://github.com/liuqk3/PUT) and uses the bipartite
+matching primitive associated with [ToMe](https://github.com/facebookresearch/ToMe).
+Third-party code remains subject to its original license and attribution
+requirements; see [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md) and the
+license files under `third_party/`.
+
+Older SBVC launchers, results, and Latent Codes integrations remain in the
+repository for provenance and compatibility. They are not part of the current
+IPTC result path. No pretrained weights, credentials, private datasets, or
+internal review materials are included.
+
+## Citation
+
+```bibtex
+@software{wang2026iptc,
+  author  = {Wang, Kehan and Peng, Hong and Zheng, Weifa and Lan, Guosheng and Yu, Ying},
+  title   = {Compress the Context, Preserve the Interface: Efficient Transformer Inpainting through Interface-Preserving Token Coarsening},
+  year    = {2026},
+  url     = {https://github.com/khan-wang/IPTC}
+}
+```
+
+The repository-wide license status and third-party notices are documented in
+[`LICENSE.md`](LICENSE.md) and [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md).
+
+
