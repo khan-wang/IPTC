@@ -11,21 +11,19 @@ map, and prunes output rows whose downstream consumers are inactive. The
 release contains the evaluated inference path and does not redistribute model
 weights or benchmark data.
 
-## Paper
+## Project
 
 **Authors:** Kehan Wang, Hong Peng, Weifa Zheng, Guosheng Lan, and Ying Yu.
 
-The repository accompanies the manuscript and makes the core implementation,
-reported aggregates, source provenance, and verification procedure available
-for inspection.
+The repository provides the core implementation, reported aggregates, source
+provenance, and verification procedure for the IPTC project.
 
 ## Method overview
 
 ![IPTC main framework](assets/iptc_main_figure.png)
 
 The overview shows the interface-preserving coarsening path, singleton
-protection, grid reconstruction, and tail-block output liveness. A vector-like
-PDF version is retained with the manuscript source package.
+protection, grid reconstruction, and tail-block output liveness.
 
 ## Repository layout
 

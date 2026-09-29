@@ -1,5 +1,5 @@
 cff-version: 1.2.0
-message: "If you use IPTC or its released results, please cite the associated manuscript and this repository."
+message: "If you use IPTC or its released results, please cite this repository."
 title: "Compress the Context, Preserve the Interface: Efficient Transformer Inpainting through Interface-Preserving Token Coarsening"
 type: software
 authors:
