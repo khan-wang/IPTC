@@ -19,6 +19,14 @@ The repository accompanies the manuscript and makes the core implementation,
 reported aggregates, source provenance, and verification procedure available
 for inspection.
 
+## Method overview
+
+![IPTC main framework](assets/iptc_main_figure.png)
+
+The overview shows the interface-preserving coarsening path, singleton
+protection, grid reconstruction, and tail-block output liveness. A vector-like
+PDF version is retained with the manuscript source package.
+
 ## Repository layout
 
 ```text
